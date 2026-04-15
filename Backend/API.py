@@ -42,7 +42,7 @@ def get_activation(name):
 def get_attention_hook(name):
     def hook(module, input, output):
         _, weights = output
-        attention_weights[name] = weights.detach().cpu()
+        attention_weights[name] = weights
     return hook
 
 def hookUp():
@@ -99,31 +99,46 @@ def prepareSource(text, tokenizer):
 
 def greedyPredict(src_tokens, src_mask):
     global decoder_activations, outputSeq, step_probabilities
+
     decoder_activations = []
     step_probabilities = []
     outputSeq = ["[SOS]"]
+
     with torch.no_grad():
         encoder_output = model.encode(src_tokens, src_mask)
+
+    generated_ids = [tgt_tokenizer.token_to_id("[SOS]")]
+    sos_id = tgt_tokenizer.token_to_id("[SOS]")
+    eos_id = tgt_tokenizer.token_to_id("[EOS]")
+    pad_id = tgt_tokenizer.token_to_id("[PAD]")
+
     decoder_input = torch.full((1, MAX_SEQ_LEN), tgt_tokenizer.token_to_id("[PAD]"), dtype=torch.long, device=device)
     decoder_input[0, 0] = tgt_tokenizer.token_to_id("[SOS]")
-    causal_mask = torch.tril(torch.ones(MAX_SEQ_LEN, MAX_SEQ_LEN, device=device)).bool()
+
     for index in range(1, MAX_SEQ_LEN):
-        tgt_mask = (decoder_input != tgt_tokenizer.token_to_id("[PAD]")).unsqueeze(1) & causal_mask
+        current_causal = CAUSAL_MASK[:index, :index].unsqueeze(0).unsqueeze(1)
+        tgt_mask = (decoder_input[:, :index] != pad_id).unsqueeze(1).unsqueeze(2) & current_causal
+
         with torch.no_grad():
-            decoder_output = model.decode(decoder_input, encoder_output, tgt_mask, src_mask)
-            last_token_feat = decoder_output[:, index - 1:index, :]
+            decoder_output = model.decode(decoder_input[:, :index], encoder_output, tgt_mask, src_mask)
+
+            last_token_feat = decoder_output[:, -1:, :]
             predictions = model.project(last_token_feat)
+
             probs = torch.softmax(predictions, dim=-1)
             step_probabilities.append(probs.cpu())
+
         step_snapshot = {name: {k: v.clone() for k, v in val.items()}
                          for name, val in activations.items() if "decoder" in name}
         decoder_activations.append(step_snapshot)
+
         output_id = torch.argmax(predictions[0, 0]).item()
         decoder_input[0, index] = output_id
-        token_text = tgt_tokenizer.id_to_token(output_id)
-        outputSeq.append(token_text)
+        generated_ids.append(output_id)
+
         if output_id == tgt_tokenizer.token_to_id("[EOS]"):
             break
+    outputSeq = [tgt_tokenizer.id_to_token(idx) for idx in generated_ids]
 
 @app.get("/translate/")
 async def translate(text: str):
@@ -141,7 +156,7 @@ async def get_attention(layer_id: int, type_l: str):
     try:
         key = f"{type_l}-attn-{layer_id}"
         if type_l == "encoder": key = f"encoder-attn-{layer_id}"
-        weights = attention_weights.get(key)
+        weights = attention_weights.get(key).detach().cpu()
         if weights is None:
             raise HTTPException(status_code=404, detail="Weights not found.")
         src_tokens = [src_tokenizer.id_to_token(i) for i in inputSeq if src_tokenizer.id_to_token(i) != "[PAD]"]
@@ -314,6 +329,7 @@ async def get_projection_graph():
 
 if __name__ == "__main__":
     try:
+        CAUSAL_MASK = torch.tril(torch.ones(MAX_SEQ_LEN, MAX_SEQ_LEN, device=device)).bool()
         src_tokenizer = getOrBuildTokenizer(ENGLISH_TOKENIZER_PATH, getDataset(DATASET_PATH), "en")
         tgt_tokenizer = getOrBuildTokenizer(FRENCH_TOKENIZER_PATH, getDataset(DATASET_PATH), "fr")
         model = getModel()

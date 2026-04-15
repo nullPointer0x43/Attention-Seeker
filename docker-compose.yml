@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  backend:
+    image: kinjal1234/transformer-backend:latest
+    build: 
+      context: ./Backend
+    container_name: transformer-backend
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: always
+
+  frontend:
+    image: kinjal1234/transformer-frontend:latest
+    build: 
+      context: ./Frontend
+    container_name: transformer-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: always

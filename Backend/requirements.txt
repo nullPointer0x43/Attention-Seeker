@@ -1,8 +1,9 @@
 # --- PyTorch with CUDA 12.1 Support ---
---extra-index-url https://download.pytorch.org/whl/cu121
-torch>=2.1.0
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.2.1+cu118
 torchvision
 torchaudio
+numpy<2.0
 
 # --- Web Framework & Server ---
 fastapi
